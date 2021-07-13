@@ -10,14 +10,31 @@ module.exports = function(homebridge) {
 function SwitchAccessory(log, config) {
     this.log = log;
     this.name = config.name;
-    this.ip = config.ip;
+    this.gpio = config.gpio;
     this.pulse = config.pulse || false;
-    this.action = config.action || 'off';
-    this.duration = config.duration || 60;
+    this.pulseTime = config.pulseTime || 500;
+    this.controlUrl = config.controlUrl;
+    this.statusUrl = config.statusUrl;
+    this.login = config.login;
+    this.password = config.password;
 
-    if (!this.ip) {
-        throw new Error('Your must provide IP address of the switch.');
-	}
+    this.baseAuthHeader = null;
+
+    if (this.login && this.password) {
+        this.baseAuthHeader = 'Basic ' + Buffer.from(this.login + ':' + this.password).toString('base64');
+    }
+
+    if (this.controlUrl == null) {
+        throw new Error("You have to provide 'controlUrl' to control switch");
+    }
+
+    if (this.statusUrl == null) {
+        throw new Error("You have to provide 'statusUrl' to get device information");
+    }
+
+    if (this.gpio == null) {
+        throw new Error("You have to provide 'gpio' to get device information");
+    }
 
 
     this.service = new Service.Switch(this.name);
@@ -34,65 +51,80 @@ function SwitchAccessory(log, config) {
 }
 
 SwitchAccessory.prototype = {
+
     getPowerState: function(callback) {
-        var log = this.log;
+       var options = {
+            url: this.statusUrl,
+            timeout: 120000,
+            headers: {
+                "Authorization": this.baseAuthHeader
+            }
+        }
 
-		if (this.pulse) {
-			callback(null, false);
-			return;
-		}
+        request.get(options, (error, resp, body) => {
+            if (!error && resp.statusCode == 200) {
+                try {
+                    var switchStatus = JSON.parse(body).gpio[this.gpio];
+                } catch (exception) {
+                    this.log('Exception during parsing response from the switch.\n', exception.stack);
+                    callback(new Error('Exception during parsing response from the switch.'))
+                    return;
+                }
 
-        request.get({
-            url: 'http://' + this.ip + '/control?cmd=status,gpio,12',
-            timeout: 120000
-        }, function(error, response, body) {
-            if (!error && response.statusCode == 200) {
-                var json = JSON.parse(body);
-
-                log.debug('State: ' + json.state);
-                callback(null, (json.state == 1));
+                callback(null, switchStatus);
+                return;
+            } else if (resp.statusCode == 401) {
+                this.log('Unable to obtain switch status. Login and password are not correct.');
+                callback(new Error('Unable to obtain switch status. Login and password are not correct.'));
                 return;
             }
 
-            log.debug('Error getting power state. (%s)', error);
-
-            callback();
+            this.log('Error getting switch state. Error: %s', error);
+            callback(new Error('Error getting switch state.'));
         });
     },
 
+    buildControlPowerStateUrl: function (state) {
+        // state - текущее состояние выключателя включен/выключен
+        var urlParams = '?st=' + Number(state) + '&pin=' + this.gpio.toString()
+        if (this.pulse) {
+            urlParams += '&mclick=' + this.pulseTime
+        }
+
+        return this.controlUrl + urlParams
+    },
+
     setPowerState: function(state, callback) {
-        var log = this.log;
-		var command = '/control?cmd=event,' + ((state) ? 'PowerOn' : 'PowerOff');
+		var options = {
+            url: this.buildControlPowerStateUrl(state),
+            timeout: 120000,
+            headers: {
+                "Authorization": this.baseAuthHeader
+            }
+        }
 
-		if (this.pulse && state) {
-			command = '/control?cmd=Pulse,12,' + ((this.action == 'on') ? 1 : 0) + ',' + (parseInt(this.duration) * 1000);
-		}
-
-        request.get({
-            url: 'http://' + this.ip + command,
-            timeout: 120000
-        }, function(error, response, body) {
-            if (!error && response.statusCode == 200) {
-                if (body == 'OK') {
-                    return;
-				}
-
-                log.debug('Response Error: %s', body);
+        request.get(options, (error, resp, body) => {
+            if (!error && resp.statusCode == 200 && body == 'OK') {
+                if (this.pulse) {
+                    setTimeout(
+                        () => {this.service.getCharacteristic(Characteristic.On).updateValue(false);},
+                        this.pulseTime
+                    );
+                }
+                callback(null, true);
+                return;
+            } else if (resp.statusCode == 401) {
+                this.log('Cannot change the position of the switch. Login and password are not correct.');
+                callback(new Error('Cannot change the position of the switch. Login and password are not correct.'));
                 return;
             }
 
-            log.debug('Error setting device control. (%s)', error);
+            this.log(
+                'An error occurred while sending request to change the status of the switch. ' +
+                'Error: %s, response code: %d, body: %s', error, resp.statusCode, body
+            );
+            callback(new Error('An error occurred while sending request to change the status of the switch.'));
         });
-
-		if (this.pulse) {
-			var that = this;
-			
-			setTimeout(function() {
-				that.service.getCharacteristic(Characteristic.On).updateValue(false);
-			}, 2000);
-		}
-
-        callback();
     },
 
     identify: function(callback) {
