@@ -4,18 +4,16 @@
   "description": "Plugin for Homebridge to work with switch running on wifi iot",
   "license": "MIT",
   "keywords": [
-    "homebridge-plugin", "switch", "wifi-iot"
+    "homebridge-plugin",
+    "switch",
+    "wifi-iot"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/aleksey925/homebridge-switch-wifi-iot.git"
   },
   "engines": {
-    "node": ">=0.12.0",
-    "homebridge": ">=0.2.0",
-    "request": ">=2.81.0"
-  },
-  "dependencies": {
-    "request": ">=2.81.0"
+    "node": ">=8.0.0",
+    "homebridge": ">=0.4.20"
   }
 }

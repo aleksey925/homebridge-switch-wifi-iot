@@ -1,4 +1,5 @@
-var request = require('request');
+const http = require('http');
+
 var Service, Characteristic;
 
 module.exports = function(homebridge) {
@@ -53,34 +54,41 @@ function SwitchAccessory(log, config) {
 SwitchAccessory.prototype = {
 
     getPowerState: function(callback) {
-       var options = {
-            url: this.statusUrl,
-            timeout: 120000,
+        var reqOptions = {
             headers: {
                 "Authorization": this.baseAuthHeader
             }
         }
 
-        request.get(options, (error, resp, body) => {
-            if (!error && resp.statusCode == 200) {
-                try {
-                    var switchStatus = JSON.parse(body).gpio[this.gpio];
-                } catch (exception) {
-                    this.log('Exception during parsing response from the switch.\n', exception.stack);
-                    callback(new Error('Exception during parsing response from the switch.'))
+        http.get(this.statusUrl, reqOptions, (resp) => {
+            let data = '';
+            resp.on('data', (chunk) => {
+                data += chunk;
+            });
+            resp.on('end', () => {
+                if (resp.statusCode == 200) {
+                    try {
+                        var switchStatus = JSON.parse(data).gpio[this.gpio];
+                    } catch (exception) {
+                        this.log('Exception during parsing response from the switch.\n', exception.stack);
+                        callback(new Error('Exception during parsing response from the switch.'))
+                        return;
+                    }
+
+                    callback(null, switchStatus);
+                    return;
+                } else if (resp.statusCode == 401) {
+                    this.log('Unable to obtain switch status. Login and password are not correct.');
+                    callback(new Error('Unable to obtain switch status. Login and password are not correct.'));
                     return;
                 }
 
-                callback(null, switchStatus);
-                return;
-            } else if (resp.statusCode == 401) {
-                this.log('Unable to obtain switch status. Login and password are not correct.');
-                callback(new Error('Unable to obtain switch status. Login and password are not correct.'));
-                return;
-            }
-
-            this.log('Error getting switch state. Error: %s', error);
-            callback(new Error('Error getting switch state.'));
+                this.log('Error getting switch state. Error: %s', error);
+                callback(new Error('Error getting switch state.'));
+            });
+        }).on("error", (err) => {
+            this.log("Error in trying to get switch status. Error message: ", err.message);
+            callback(new Error("Error in trying to get switch status"));
         });
     },
 
@@ -95,35 +103,41 @@ SwitchAccessory.prototype = {
     },
 
     setPowerState: function(state, callback) {
-		var options = {
-            url: this.buildControlPowerStateUrl(state),
-            timeout: 120000,
+		var reqOptions = {
             headers: {
                 "Authorization": this.baseAuthHeader
             }
         }
 
-        request.get(options, (error, resp, body) => {
-            if (!error && resp.statusCode == 200 && body == 'OK') {
-                if (this.pulse) {
-                    setTimeout(
-                        () => {this.service.getCharacteristic(Characteristic.On).updateValue(false);},
-                        this.pulseTime
-                    );
+        http.get(this.buildControlPowerStateUrl(state), reqOptions, (resp) => {
+            let data = '';
+            resp.on('data', (chunk) => {
+                data += chunk;
+            });
+            resp.on('end', () => {
+                if (resp.statusCode == 200 && data == 'OK') {
+                    if (this.pulse) {
+                        setTimeout(
+                            () => {this.service.getCharacteristic(Characteristic.On).updateValue(false);},
+                            this.pulseTime
+                        );
+                    }
+                    callback(null, true);
+                    return;
+                } else if (resp.statusCode == 401) {
+                    this.log('Cannot change the position of the switch. Login and password are not correct.');
+                    callback(new Error('Cannot change the position of the switch. Login and password are not correct.'));
+                    return;
                 }
-                callback(null, true);
-                return;
-            } else if (resp.statusCode == 401) {
-                this.log('Cannot change the position of the switch. Login and password are not correct.');
-                callback(new Error('Cannot change the position of the switch. Login and password are not correct.'));
-                return;
-            }
 
-            this.log(
-                'An error occurred while sending request to change the status of the switch. ' +
-                'Error: %s, response code: %d, body: %s', error, resp.statusCode, body
-            );
-            callback(new Error('An error occurred while sending request to change the status of the switch.'));
+                this.log(
+                    'An error occurred while sending request to change the status of the switch. ' +
+                    'Response code: %d, data: %s', resp.statusCode, data
+                );
+            });
+        }).on("error", (err) => {
+            this.log("Error while executing a relay switching request . Error message: ", err.message);
+            callback(new Error("Error while executing a relay switching request "));
         });
     },
 
